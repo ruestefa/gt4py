@@ -4,8 +4,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import gt4py as gt
 import gt4py.gtscript as gtscript
-from gt4py.gtscript import computation
+from gt4py.gtscript import BACKWARD
+from gt4py.gtscript import FORWARD
 from gt4py.gtscript import PARALLEL
+from gt4py.gtscript import computation
 from gt4py.gtscript import interval
 
 # grid size
