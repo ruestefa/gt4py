@@ -1,0 +1,42 @@
+{% set name = "gt4py" %}
+{% set version = "2022.04.09" %}
+{% set build = "0" %}
+{% set git_rev = "fe9ad84945334cdc208c0dbd70498a84f9f476cf" %}
+
+package:
+  name: {{ name | lower }}
+  version: {{ version }}
+
+source:
+  git_rev: {{ git_rev }}
+  git_url: git+ssh://git@github.com/gridtools/gt4py.git
+
+build:
+  noarch: python
+  number: {{ build }}
+  script: |
+    {{ PYTHON }} -m pip install --no-deps --ignore-installed .
+    {{ PYTHON }} -m gt4py.gt_src_manager install -m 2
+
+# Read requirements from setup.cfg (src: https://stackoverflow.com/a/61489056/4419816)
+{% set install_requires = load_setup_py_data().get("install_requires", []) %}
+requirements:
+  host:
+    - python>=3.8
+    - pip
+    {% for requirement in install_requires %}
+    - {{ requirement }}
+    {% endfor %}
+  run:
+    {% for requirement in install_requires %}
+    - {{ requirement }}
+    {% endfor %}
+
+test:
+  imports:
+    - {{ name }}
+
+about:
+  license: GNU General Public License
+  summary: Python API to develop performance portable applications for weather and climate
+  description: Python API to develop performance portable applications for weather and climate
