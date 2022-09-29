@@ -1,0 +1,89 @@
+{% set name = "gt4py" %}
+{% set version = "2022.09.29" %}
+{% set build = "0" %}
+{% set git_rev = "c08f9f60e26a4734cac26479af4593e86c91cd06" %}
+
+package:
+  name: {{ name | lower }}
+  version: {{ version }}
+
+source:
+  git_rev: {{ git_rev }}
+  git_url: git+ssh://git@github.com/gridtools/gt4py.git
+
+build:
+  noarch: python
+  number: {{ build }}
+  script: |
+    # Insert our fake version number into setup.cfg by adding the attribute or replacing its value
+    \grep -q '^version *=' setup.cfg && \sed -i "s/^\(version *= *\)\(.*\)$/\1{{ version }}/" setup.cfg
+    \grep -q '^version *=' setup.cfg || \sed -i "s/^\(name *=\)/version = {{version}}\n\1/" setup.cfg
+    {{ PYTHON }} -m pip install --no-deps --ignore-installed .
+    {{ PYTHON }} -m gt4py.gt_src_manager install
+
+# Read requirements from setup.cfg (src: https://stackoverflow.com/a/61489056/4419816)
+{% set install_requires = load_setup_py_data().get("install_requires", []) %}
+requirements:
+  host:
+    # python>=3.8
+    - python>=3.9  # see astunparse
+    - pip
+    - attrs>=20.3
+    - black>=22.3.0
+    - cached-property>=1.5
+    - click>=7.1
+    - jinja2>=2.10
+    - numpy>=1.15
+    - scipy>=1.4
+    - packaging>=20.0
+    - pybind11>=2.5
+    - tabulate>=0.8
+    - typing-extensions>=3.7
+    # astunparse>=1.6.3;python_version<'3.9'
+    # ---- eve / gtc ----
+    - boltons>=20.0
+    - cytoolz>=0.11
+    - devtools>=0.5
+    - mako>=1.1
+    - networkx>=2.4
+    - pydantic>=1.5
+    - toolz>=0.11
+    - typing_inspect>=0.6.0
+    # xxhash>=1.4.4
+    - python-xxhash>=1.4.4
+  run:
+    # python>=3.8
+    - python>=3.9  # see astunparse
+    - pip
+    - attrs>=20.3
+    - black>=22.3.0
+    - cached-property>=1.5
+    - click>=7.1
+    - jinja2>=2.10
+    - numpy>=1.15
+    - scipy>=1.4
+    - packaging>=20.0
+    - pybind11>=2.5
+    - tabulate>=0.8
+    - typing-extensions>=3.7
+    # astunparse>=1.6.3;python_version<'3.9'
+    # ---- eve / gtc ----
+    - boltons>=20.0
+    - cytoolz>=0.11
+    - devtools>=0.5
+    - mako>=1.1
+    - networkx>=2.4
+    - pydantic>=1.5
+    - toolz>=0.11
+    - typing_inspect>=0.6.0
+    # xxhash>=1.4.4
+    - python-xxhash>=1.4.4
+
+test:
+  imports:
+    - {{ name }}
+
+about:
+  license: GNU General Public License
+  summary: Python API to develop performance portable applications for weather and climate
+  description: Python API to develop performance portable applications for weather and climate
