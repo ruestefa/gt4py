@@ -15,6 +15,9 @@ build:
   noarch: python
   number: {{ build }}
   script: |
+    # Insert our fake version number into setup.cfg by adding the attribute or replacing its value
+    \grep -q '^version *=' setup.cfg && \sed -i "s/^\(version *= *\)\(.*\)$/\1{{ version }}/" setup.cfg
+    \grep -q '^version *=' setup.cfg || \sed -i "s/^\(name *=\)/version = {{version}}\n\1/" setup.cfg
     {{ PYTHON }} -m pip install --no-deps --ignore-installed .
     {{ PYTHON }} -m gt4py.gt_src_manager install -m 2
 
