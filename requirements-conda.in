@@ -1,5 +1,5 @@
 attrs>=20.3
-black>=19.3b0
+black>=22.3.0
 cached-property>=1.5
 click>=7.1
 jinja2>=2.10
@@ -9,6 +9,7 @@ packaging>=20.0
 pybind11>=2.5
 tabulate>=0.8
 typing-extensions>=3.7
+astunparse>=1.6.3;python_version<'3.9'
 # ---- eve / gtc ----
 boltons>=20.0
 cytoolz>=0.11
