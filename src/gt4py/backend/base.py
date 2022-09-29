@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GT4Py - GridTools4Py - GridTools for Python
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part the GT4Py project and the GridTools framework.
@@ -20,6 +18,7 @@ import hashlib
 import os
 import pathlib
 import time
+import warnings
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
 
 from gt4py import definitions as gt_definitions
@@ -91,13 +90,6 @@ class Backend(abc.ABC):
     #   "disable-cache-validation": bool
 
     builder: "StencilBuilder"
-
-    #: Toolchain choice between GTIR and ImplementationIR, True for ImplementationIR
-    #:
-    #: If True the ImplementationIR should be used for all code generation, analysis
-    #: and optimization. Instantiation of GTIR should be avoided.
-    #: Likewise if False, ImplementationIR should never be instanciated during builds.
-    USE_LEGACY_TOOLCHAIN: ClassVar[bool] = False
 
     def __init__(self, builder: "StencilBuilder"):
         self.builder = builder
@@ -280,7 +272,9 @@ class BaseBackend(Backend):
         assert self.options is not None
         unknown_options = set(options.backend_opts.keys()) - set(self.options.keys())
         if unknown_options:
-            raise ValueError("Unknown backend options: '{}'".format(unknown_options))
+            warnings.warn(
+                f"Unknown options '{unknown_options}' for backend '{self.name}'", RuntimeWarning
+            )
 
     def make_module(
         self,

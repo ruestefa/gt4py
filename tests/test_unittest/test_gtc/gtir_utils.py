@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GTC Toolchain - GT4Py Project - GridTools Framework
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part of the GT4Py project and the GridTools framework.
@@ -14,10 +12,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from typing import List
+from typing import Any, Dict, List, Optional
 
 import factory
 
+from eve import Str
 from gtc import common, gtir
 
 from .common_utils import (
@@ -161,3 +160,9 @@ class StencilFactory(factory.Factory):
     name = identifier(gtir.Stencil)
     vertical_loops = factory.List([factory.SubFactory(VerticalLoopFactory)])
     params = undefined_symbol_list(lambda name: FieldDeclFactory(name=name), "vertical_loops")
+    api_signature = factory.LazyAttribute(
+        lambda x: [gtir.Argument(name=p.name, is_keyword=False, default="") for p in x.params]
+    )
+    externals: Dict[str, Any] = {}
+    sources: Optional[Dict[str, str]] = None
+    docstring: Str = ""

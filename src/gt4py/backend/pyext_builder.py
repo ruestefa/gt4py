@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GT4Py - GridTools4Py - GridTools for Python
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part the GT4Py project and the GridTools framework.
@@ -74,18 +72,13 @@ def get_gt_pyext_build_opts(
     else:
         cuda_arch = ""
 
-    if gt_version == 1:
-        gt_include_path = gt_config.build_settings["gt_include_path"]
-    elif gt_version == 2:
-        gt_include_path = gt_config.build_settings["gt2_include_path"]
-    else:
-        raise RuntimeError(f"GridTools version {gt_version}.x is not supported")
+    gt_include_path = gt_config.build_settings["gt_include_path"]
 
     import os
 
     extra_compile_args = dict(
         cxx=[
-            "-std=c++14",
+            "-std=c++17",
             "-ftemplate-depth={}".format(gt_config.build_settings["cpp_template_depth"]),
             "-fvisibility=hidden",
             "-fPIC",
@@ -95,7 +88,7 @@ def get_gt_pyext_build_opts(
             *extra_compile_args_from_config["cxx"],
         ],
         nvcc=[
-            "-std=c++14",
+            "-std=c++17",
             "-ftemplate-depth={}".format(gt_config.build_settings["cpp_template_depth"]),
             "-arch=sm_{}".format(cuda_arch),
             "-isystem={}".format(gt_include_path),
@@ -121,6 +114,9 @@ def get_gt_pyext_build_opts(
     if dace_path := get_dace_module_path():
         extra_compile_args["cxx"].append(
             "-isystem{}".format(os.path.join(dace_path, "runtime/include"))
+        )
+        extra_compile_args["nvcc"].append(
+            "-isystem={}".format(os.path.join(dace_path, "runtime/include"))
         )
 
     if add_profile_info:

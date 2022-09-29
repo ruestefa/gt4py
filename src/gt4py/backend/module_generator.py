@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GTC Toolchain - GT4Py Project - GridTools Framework
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part of the GT4Py project and the GridTools framework.
@@ -17,18 +15,16 @@
 import abc
 import numbers
 import os
-import textwrap
 from dataclasses import dataclass, field
-from inspect import getdoc
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 import jinja2
 import numpy
 
-from gt4py import ir as gt_ir
 from gt4py import utils as gt_utils
-from gt4py.definitions import AccessKind, Boundary, DomainInfo, FieldInfo, ParameterInfo
+from gt4py.definitions import AccessKind, DomainInfo, FieldInfo, ParameterInfo, StencilID
 from gtc import gtir, gtir_to_oir
+from gtc.definitions import Boundary
 from gtc.passes.gtir_k_boundary import compute_k_boundary, compute_min_k_size
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_access_kinds import compute_access_kinds
@@ -42,6 +38,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ModuleData:
+    domain_info: Optional[DomainInfo] = None
     field_info: Dict[str, FieldInfo] = field(default_factory=dict)
     parameter_info: Dict[str, ParameterInfo] = field(default_factory=dict)
     unreferenced: List[str] = field(default_factory=list)
@@ -57,12 +54,17 @@ class ModuleData:
         return set(self.parameter_info.keys())
 
 
+_args_data_cache: Dict[StencilID, ModuleData] = {}
+
+
 def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
     """
     Compute module data containing information about stencil arguments from gtir.
 
     This is no longer compatible with the legacy backends.
     """
+    if pipeline.stencil_id in _args_data_cache:
+        return _args_data_cache[pipeline.stencil_id]
     data = ModuleData()
 
     # NOTE: pipeline.gtir has not had prune_unused_parameters applied.
@@ -72,6 +74,14 @@ def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
     oir = gtir_to_oir.GTIRToOIR().visit(node)
     field_extents = compute_fields_extents(oir)
     accesses = compute_access_kinds(oir)
+
+    min_sequential_axis_size = compute_min_k_size(node)
+    data.domain_info = DomainInfo(
+        parallel_axes=("I", "J"),
+        sequential_axis="K",
+        min_sequential_axis_size=min_sequential_axis_size,
+        ndim=3,
+    )
 
     for decl in (param for param in all_params if isinstance(param, gtir.FieldDecl)):
         access = accesses[decl.name]
@@ -97,6 +107,7 @@ def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
         data.parameter_info[decl.name] = ParameterInfo(access=access, dtype=dtype)
 
     data.unreferenced = [*sorted(name for name in accesses if accesses[name] == AccessKind.NONE)]
+    _args_data_cache[pipeline.stencil_id] = data
     return data
 
 
@@ -140,11 +151,12 @@ class BaseModuleGenerator(abc.ABC):
             imports=self.generate_imports(),
             module_members=self.generate_module_members(),
             class_name=self.generate_class_name(),
+            base_class=self.generate_base_class_name(),
             class_members=self.generate_class_members(),
             docstring=self.generate_docstring(),
             gt_backend=self.generate_backend_name(),
             gt_source=self.generate_sources(),
-            gt_domain_info=self.generate_domain_info(),
+            gt_domain_info=repr(self.args_data.domain_info),
             gt_field_info=repr(self.args_data.field_info),
             gt_parameter_info=repr(self.args_data.parameter_info),
             gt_constants=self.generate_constants(),
@@ -187,7 +199,7 @@ class BaseModuleGenerator(abc.ABC):
 
     def generate_imports(self) -> str:
         """Generate import statements and related code for the stencil class module."""
-        return ""
+        return "from gt4py.stencil_object import StencilObject"
 
     def generate_class_name(self) -> str:
         """
@@ -198,6 +210,9 @@ class BaseModuleGenerator(abc.ABC):
         """
         return self.builder.class_name
 
+    def generate_base_class_name(self) -> str:
+        return "StencilObject"
+
     def generate_docstring(self) -> str:
         """
         Generate the docstring of the stencil object.
@@ -207,7 +222,7 @@ class BaseModuleGenerator(abc.ABC):
         The output should be least based on the stencil definition's docstring,
         if one exists.
         """
-        return getdoc(self.builder.definition) or ""
+        return self.builder.gtir.docstring or ""
 
     def generate_backend_name(self) -> str:
         """
@@ -223,10 +238,10 @@ class BaseModuleGenerator(abc.ABC):
 
         This is unlikely to require overriding.
         """
-        if self.builder.definition_ir.sources is not None:
+        if self.builder.gtir.sources is not None:
             return {
                 key: gt_utils.text.format_source(value, line_length=self.SOURCE_LINE_LENGTH)
-                for key, value in self.builder.definition_ir.sources
+                for key, value in self.builder.gtir.sources
             }
         return {}
 
@@ -236,10 +251,10 @@ class BaseModuleGenerator(abc.ABC):
 
         This is unlikely to require overriding.
         """
-        if self.builder.definition_ir.externals:
+        if self.builder.gtir.externals:
             return {
                 name: repr(value)
-                for name, value in self.builder.definition_ir.externals.items()
+                for name, value in self.builder.gtir.externals.items()
                 if isinstance(value, numbers.Number)
             }
         return {}
@@ -255,28 +270,6 @@ class BaseModuleGenerator(abc.ABC):
             for key, value in self.builder.options.as_dict().items()
             if key not in ["build_info"]
         }
-
-    def generate_domain_info(self) -> str:
-        """
-        Generate a ``DomainInfo`` constructor call with the correct arguments.
-
-        Might require overriding for module generators of non-cartesian backends.
-        """
-        parallel_axes = self.builder.definition_ir.domain.parallel_axes or []
-        sequential_axis = self.builder.definition_ir.domain.sequential_axis.name
-        if self.builder.backend.USE_LEGACY_TOOLCHAIN:
-            min_sequential_axis_size = 0
-        else:
-            min_sequential_axis_size = compute_min_k_size(self.builder.gtir_pipeline.full())
-        domain_info = repr(
-            DomainInfo(
-                parallel_axes=tuple(ax.name for ax in parallel_axes),
-                sequential_axis=sequential_axis,
-                min_sequential_axis_size=min_sequential_axis_size,
-                ndim=len(parallel_axes) + (1 if sequential_axis else 0),
-            )
-        )
-        return domain_info
 
     def generate_module_members(self) -> str:
         """
@@ -302,16 +295,16 @@ class BaseModuleGenerator(abc.ABC):
         """
         args = []
         keyword_args = ["*"]
-        for arg in self.builder.definition_ir.api_signature:
+        for arg in self.builder.gtir.api_signature:
             if arg.is_keyword:
-                if arg.default is not gt_ir.Empty:
+                if arg.default:
                     keyword_args.append(
                         "{name}={default}".format(name=arg.name, default=arg.default)
                     )
                 else:
                     keyword_args.append(arg.name)
             else:
-                if arg.default is not gt_ir.Empty:
+                if arg.default:
                     args.append("{name}={default}".format(name=arg.name, default=arg.default))
                 else:
                     args.append(arg.name)
@@ -329,131 +322,3 @@ class BaseModuleGenerator(abc.ABC):
     def generate_post_run(self) -> str:
         """Additional code to be run just after the run method (implementation) is called."""
         return ""
-
-
-def iir_is_not_emtpy(implementation_ir: gt_ir.StencilImplementation) -> bool:
-    return bool(implementation_ir.multi_stages)
-
-
-def gtir_is_not_emtpy(pipeline: GtirPipeline) -> bool:
-    node = pipeline.full()
-    return bool(node.iter_tree().if_isinstance(gtir.ParAssignStmt).to_list())
-
-
-def iir_has_effect(implementation_ir: gt_ir.StencilImplementation) -> bool:
-    return bool(implementation_ir.has_effect)
-
-
-def gtir_has_effect(pipeline: GtirPipeline) -> bool:
-    return True
-
-
-class PyExtModuleGenerator(BaseModuleGenerator):
-    """
-    Module Generator for use with backends that generate c++ python extensions.
-
-    Will either use ImplementationIR or GTIR depending on the backend's USE_LEGACY_TOOLCHAIN
-    class attribute. Using with other IRs requires subclassing and overriding ``_is_not_empty()``
-    and ``_has_effect()`` methods.
-    """
-
-    pyext_module_name: Optional[str]
-    pyext_file_path: Optional[str]
-
-    def __init__(self):
-        super().__init__()
-        self.pyext_module_name = None
-        self.pyext_file_path = None
-
-    def __call__(
-        self,
-        args_data: ModuleData,
-        builder: Optional["StencilBuilder"] = None,
-        **kwargs: Any,
-    ) -> str:
-        self.pyext_module_name = kwargs["pyext_module_name"]
-        self.pyext_file_path = kwargs["pyext_file_path"]
-        return super().__call__(args_data, builder, **kwargs)
-
-    def _is_not_empty(self) -> bool:
-        if self.pyext_module_name is None:
-            return False
-        if self.builder.backend.USE_LEGACY_TOOLCHAIN:
-            return iir_is_not_emtpy(self.builder.implementation_ir)
-        return gtir_is_not_emtpy(self.builder.gtir_pipeline)
-
-    def generate_imports(self) -> str:
-        source = ["from gt4py import utils as gt_utils"]
-        if self._is_not_empty():
-            assert self.pyext_file_path is not None
-            file_path = 'f"{{pathlib.Path(__file__).parent.resolve()}}/{}"'.format(
-                os.path.basename(self.pyext_file_path)
-            )
-            source.append(
-                textwrap.dedent(
-                    f"""
-                pyext_module = gt_utils.make_module_from_file(
-                    "{self.pyext_module_name}", {file_path}, public_import=True
-                )
-                """
-                )
-            )
-        return "\n".join(source)
-
-    def _has_effect(self) -> bool:
-        if not self._is_not_empty():
-            return False
-        if self.builder.backend.USE_LEGACY_TOOLCHAIN:
-            return iir_has_effect(self.builder.implementation_ir)
-        return gtir_has_effect(self.builder.gtir_pipeline)
-
-    def generate_implementation(self) -> str:
-        definition_ir = self.builder.definition_ir
-        sources = gt_utils.text.TextBlock(indent_size=BaseModuleGenerator.TEMPLATE_INDENT_SIZE)
-
-        args = []
-        api_fields = set(field.name for field in definition_ir.api_fields)
-        for arg in definition_ir.api_signature:
-            if arg.name not in self.args_data.unreferenced:
-                args.append(arg.name)
-                if arg.name in api_fields:
-                    args.append("list(_origin_['{}'])".format(arg.name))
-
-        # only generate implementation if any multi_stages are present. e.g. if no statement in the
-        # stencil has any effect on the API fields, this may not be the case since they could be
-        # pruned.
-        if self._has_effect():
-            source = textwrap.dedent(
-                f"""
-                # Load or generate a GTComputation object for the current domain size
-                pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])})
-                """
-            )
-            sources.extend(source.splitlines())
-        else:
-            sources.extend("\n")
-
-        return sources.text
-
-
-class CUDAPyExtModuleGenerator(PyExtModuleGenerator):
-    def generate_implementation(self) -> str:
-        source = super().generate_implementation()
-        if self.builder.options.backend_opts.get("device_sync", True):
-            source += textwrap.dedent(
-                """
-                    cupy.cuda.Device(0).synchronize()
-                """
-            )
-        return source
-
-    def generate_imports(self) -> str:
-        source = (
-            textwrap.dedent(
-                """
-                import cupy
-                """
-            )
-            + super().generate_imports()
-        )
-        return source

@@ -1,3 +1,17 @@
+# GT4Py - GridTools Framework
+#
+# Copyright (c) 2014-2022, ETH Zurich
+# All rights reserved.
+#
+# This file is part of the GT4Py project and the GridTools framework.
+# GT4Py is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or any later
+# version. See the LICENSE.txt file at the top-level directory of this
+# distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # flake8: noqa: F841
 from typing import Callable, List, Tuple, TypedDict
 
@@ -20,6 +34,16 @@ def register_test_case(*, valid):
         return definition
 
     return _wrapper
+
+
+@pytest.fixture
+def clear_gtir_caches():
+    from gt4py.backend import module_generator
+    from gtc.passes.gtir_pipeline import GtirPipeline
+
+    GtirPipeline._cache.clear()
+    module_generator._args_data_cache.clear()
+    yield
 
 
 # test cases
@@ -162,7 +186,7 @@ def daa_10(in_field: Field[float], cond_field: Field[float], mask: bool, out_fie
 
 
 @pytest.mark.parametrize("definition,valid", [(stencil, valid) for stencil, valid in test_data])
-def test_daa(definition, valid):
+def test_daa(definition, valid, clear_gtir_caches):
     builder = StencilBuilder(definition, backend=from_name("debug"))
     gtir_stencil_expr = builder.gtir_pipeline.full()
     invalid_accesses = daa.analyze(gtir_stencil_expr)
@@ -173,7 +197,7 @@ def test_daa(definition, valid):
 
 
 @pytest.mark.parametrize("definition", [stencil for stencil, valid in test_data if not valid])
-def test_daa_warn(definition):
-    backend = "gtc:gt:cpu_ifirst"
+def test_daa_warn(definition, clear_gtir_caches):
+    backend = "gt:cpu_ifirst"
     with pytest.warns(UserWarning, match="`tmp` may be uninitialized."):
         stencil(backend, definition)

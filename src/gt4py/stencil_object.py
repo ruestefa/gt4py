@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GT4Py - GridTools4Py - GridTools for Python
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part the GT4Py project and the GridTools framework.
@@ -28,8 +26,9 @@ import numpy as np
 
 import gt4py.backend as gt_backend
 import gt4py.storage as gt_storage
-import gt4py.utils as gt_utils
-from gt4py.definitions import AccessKind, DomainInfo, FieldInfo, Index, ParameterInfo, Shape
+import gtc.utils as gtc_utils
+from gt4py.definitions import AccessKind, DomainInfo, FieldInfo, ParameterInfo
+from gtc.definitions import Index, Shape
 
 
 FieldType = Union[gt_storage.storage.Storage, np.ndarray]
@@ -81,6 +80,21 @@ class FrozenStencil:
 
         if exec_info is not None:
             exec_info["call_run_end_time"] = time.perf_counter()
+
+    def __sdfg__(self, **kwargs):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.stencil_object.backend}")'
+        )
+
+    def __sdfg_signature__(self):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.stencil_object.backend}")'
+        )
+
+    def __sdfg_closure__(self, *args, **kwargs):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.stencil_object.backend}")'
+        )
 
 
 class StencilObject(abc.ABC):
@@ -231,9 +245,11 @@ class StencilObject(abc.ABC):
 
         raise ValueError("Invalid 'origin' value ({})".format(origin))
 
+    @staticmethod
     def _get_max_domain(
-        self,
         field_args: Dict[str, Any],
+        domain_infos: DomainInfo,
+        field_infos: Dict[str, FieldInfo],
         origin: Dict[str, Tuple[int, ...]],
         *,
         squeeze: bool = True,
@@ -253,11 +269,11 @@ class StencilObject(abc.ABC):
         -------
             `Shape`: the maximum domain size.
         """
-        domain_ndim = self.domain_info.ndim
+        domain_ndim = domain_infos.ndim
         max_size = sys.maxsize
         max_domain = Shape([max_size] * domain_ndim)
 
-        for name, field_info in self.field_info.items():
+        for name, field_info in field_infos.items():
             if field_info.access != AccessKind.NONE:
                 assert field_args.get(name, None) is not None, f"Invalid value for '{name}' field."
                 field = field_args[name]
@@ -309,7 +325,11 @@ class StencilObject(abc.ABC):
         if not domain > Shape.zeros(domain_ndim):
             raise ValueError(f"Compute domain contains zero sizes '{domain}')")
 
-        if not domain <= (max_domain := self._get_max_domain(field_args, origin, squeeze=False)):
+        if not domain <= (
+            max_domain := self._get_max_domain(
+                field_args, self.domain_info, self.field_info, origin, squeeze=False
+            )
+        ):
             raise ValueError(
                 f"Compute domain too large (provided: {domain}, maximum: {max_domain})"
             )
@@ -381,7 +401,7 @@ class StencilObject(abc.ABC):
                         f"Field '{name}' expects data dimensions {field_info.data_dims} but got {field.shape[field_domain_ndim:]}"
                     )
 
-                min_origin = gt_utils.interpolate_mask(
+                min_origin = gtc_utils.interpolate_mask(
                     field_info.boundary.lower_indices.filter_mask(field_domain_mask),
                     field_domain_mask,
                     default=0,
@@ -412,37 +432,39 @@ class StencilObject(abc.ABC):
                         f"The type of parameter '{name}' is '{type(parameter)}' instead of '{parameter_info.dtype}'"
                     )
 
+    @staticmethod
     def _normalize_origins(
-        self, field_args: Dict[str, FieldType], origin: Optional[OriginType]
+        field_args: Dict[str, FieldType],
+        field_infos: Dict[str, FieldInfo],
+        origin: Optional[OriginType],
     ) -> Dict[str, Tuple[int, ...]]:
-        origin = self._make_origin_dict(origin)
+        origin = StencilObject._make_origin_dict(origin)
         all_origin = origin.get("_all_", None)
-
         # Set an appropriate origin for all fields
-        for name, field_info in self.field_info.items():
-            if field_info.access != AccessKind.NONE:
-                assert name in field_args, f"Missing value for '{name}' field."
-                field_origin = origin.get(name, None)
 
-                if field_origin is not None:
-                    field_origin_ndim = len(field_origin)
-                    if field_origin_ndim != field_info.ndim:
-                        assert (
-                            field_origin_ndim == field_info.domain_ndim
-                        ), f"Invalid origin specification ({field_origin}) for '{name}' field."
-                        origin[name] = (*field_origin, *((0,) * len(field_info.data_dims)))
+        for name, field_info in field_infos.items():
+            assert name in field_args, f"Missing value for '{name}' field."
+            field_origin = origin.get(name, None)
 
-                elif all_origin is not None:
-                    origin[name] = (
-                        *gt_utils.filter_mask(all_origin, field_info.domain_mask),
-                        *((0,) * len(field_info.data_dims)),
-                    )
+            if field_origin is not None:
+                field_origin_ndim = len(field_origin)
+                if field_origin_ndim != field_info.ndim:
+                    assert (
+                        field_origin_ndim == field_info.domain_ndim
+                    ), f"Invalid origin specification ({field_origin}) for '{name}' field."
+                    origin[name] = (*field_origin, *((0,) * len(field_info.data_dims)))
 
-                elif isinstance(field_arg := field_args.get(name), gt_storage.storage.Storage):
-                    origin[name] = field_arg.default_origin
+            elif all_origin is not None:
+                origin[name] = (
+                    *gtc_utils.filter_mask(all_origin, field_info.domain_mask),
+                    *((0,) * len(field_info.data_dims)),
+                )
 
-                else:
-                    origin[name] = (0,) * field_info.ndim
+            elif hasattr(field_arg := field_args.get(name), "default_origin"):
+                assert field_arg is not None  # for mypy
+                origin[name] = field_arg.default_origin
+            else:
+                origin[name] = (0,) * field_info.ndim
 
         return origin
 
@@ -490,10 +512,10 @@ class StencilObject(abc.ABC):
 
         cache_key = _compute_cache_key(field_args, parameter_args, domain, origin)
         if cache_key not in self._domain_origin_cache:
-            origin = self._normalize_origins(field_args, origin)
+            origin = self._normalize_origins(field_args, self.field_info, origin)
 
             if domain is None:
-                domain = self._get_max_domain(field_args, origin)
+                domain = self._get_max_domain(field_args, self.domain_info, self.field_info, origin)
 
             if validate_args:
                 self._validate_args(field_args, parameter_args, domain, origin)
@@ -545,3 +567,22 @@ class StencilObject(abc.ABC):
             None
         """
         type(self)._domain_origin_cache.clear()
+
+    def __deepcopy__(self, memodict=None):
+        # StencilObjects are singletons.
+        return self
+
+    def __sdfg__(self, *args, **kwargs):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.backend}")'
+        )
+
+    def __sdfg_signature__(self):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.backend}")'
+        )
+
+    def __sdfg_closure__(self, *args, **kwargs):
+        raise TypeError(
+            f'Only dace backends are supported in DaCe-orchestrated programs. (found "{self.backend}")'
+        )

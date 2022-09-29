@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GTC Toolchain - GT4Py Project - GridTools Framework
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part of the GT4Py project and the GridTools framework.
@@ -16,9 +14,9 @@
 
 from typing import Any, Dict
 
-from eve import NOTHING, NodeTranslator
-from gt4py.definitions import Extent
+from eve import NOTHING, NodeTranslator, iter_tree
 from gtc import oir
+from gtc.definitions import Extent
 from gtc.passes.horizontal_masks import mask_overlap_with_extent
 from gtc.passes.oir_optimizations.utils import compute_horizontal_block_extents
 
@@ -26,9 +24,16 @@ from gtc.passes.oir_optimizations.utils import compute_horizontal_block_extents
 class NoFieldAccessPruning(NodeTranslator):
     def visit_HorizontalExecution(self, node: oir.HorizontalExecution) -> Any:
         try:
-            next(iter(node.iter_tree().if_isinstance(oir.FieldAccess)))
+            next(
+                iter(
+                    acc
+                    for left in node.iter_tree().if_isinstance(oir.AssignStmt).getattr("left")
+                    for acc in left.iter_tree().if_isinstance(oir.FieldAccess)
+                )
+            )
         except StopIteration:
             return NOTHING
+
         return node
 
     def visit_VerticalLoopSection(self, node: oir.VerticalLoopSection) -> Any:
@@ -49,6 +54,20 @@ class NoFieldAccessPruning(NodeTranslator):
             loop_order=node.loop_order,
             sections=sections,
             caches=node.caches,
+            loc=node.loc,
+        )
+
+    def visit_Stencil(self, node: oir.Stencil, **kwargs):
+        vertical_loops = self.visit(node.vertical_loops, **kwargs)
+        accessed_fields = (
+            iter_tree(vertical_loops).if_isinstance(oir.FieldAccess).getattr("name").to_set()
+        )
+        declarations = [decl for decl in node.declarations if decl.name in accessed_fields]
+        return oir.Stencil(
+            name=node.name,
+            vertical_loops=vertical_loops,
+            params=node.params,
+            declarations=declarations,
             loc=node.loc,
         )
 

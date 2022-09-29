@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # GT4Py - GridTools4Py - GridTools for Python
 #
-# Copyright (c) 2014-2021, ETH Zurich
+# Copyright (c) 2014-2022, ETH Zurich
 # All rights reserved.
 #
 # This file is part the GT4Py project and the GridTools framework.
@@ -15,7 +13,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import itertools
-from typing import Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -25,14 +23,19 @@ try:
 except ImportError:
     cp = None
 
+try:
+    import dace
+except ImportError:
+    dace = None
+
 from gt4py import backend as gt_backend
-from gt4py import utils as gt_utils
+from gtc import utils as gtc_utils
 
 from . import utils as storage_utils
 
 
 def _error_on_invalid_backend(backend):
-    if not backend in gt_backend.REGISTRY:
+    if backend not in gt_backend.REGISTRY:
         raise RuntimeError(f"Backend '{backend}' is not registered.")
 
 
@@ -114,6 +117,8 @@ class Storage(np.ndarray):
 
     __array_subok__ = True
 
+    default_origin: Tuple[int, ...]
+
     def __new__(cls, shape, dtype, backend, default_origin, mask=None):
         """
         Parameters
@@ -126,7 +131,7 @@ class Storage(np.ndarray):
             supported are the floating point and integer dtypes of numpy
 
         backend: string, backend identifier
-            Currently possible: debug, numpy, gtx86, gtmc, gtcuda
+            Currently possible: numpy, gt:cpu_ifirst, gt:cpu_kfirst, gt:gpu
 
         default_origin: tuple of ints
             determines the point to which the storage memory address is aligned.
@@ -220,7 +225,7 @@ class Storage(np.ndarray):
                     index_iter = itertools.chain(
                         obj._new_index, [slice(None, None)] * (len(obj.mask) - len(obj._new_index))
                     )
-                    interpolated_mask = gt_utils.interpolate_mask(
+                    interpolated_mask = gtc_utils.interpolate_mask(
                         (isinstance(x, slice) for x in index_iter), obj.mask, False
                     )
                     self._mask = tuple(x & y for x, y in zip(obj.mask, interpolated_mask))
@@ -261,6 +266,34 @@ class Storage(np.ndarray):
 
     def device_to_host(self, force=False):
         pass
+
+    if dace is not None:
+
+        def __descriptor__(self) -> "dace.data.Array":
+            storage = (
+                dace.StorageType.GPU_Global
+                if hasattr(self, "__cuda_array_interface__")
+                else dace.StorageType.CPU_Heap
+            )
+            start_offset = (
+                int(np.array([self.default_origin]) @ np.array([self.strides]).T) // self.itemsize
+            )
+            total_size = int(
+                int(np.array([self.shape]) @ np.array([self.strides]).T) // self.itemsize
+            )
+            start_offset = (
+                start_offset % gt_backend.from_name(self.backend).storage_info["alignment"]
+            )
+            descriptor = dace.data.Array(
+                shape=self.shape,
+                strides=[s // self.itemsize for s in self.strides],
+                dtype=dace.typeclass(str(self.dtype)),
+                storage=storage,
+                total_size=total_size,
+                start_offset=start_offset,
+            )
+            descriptor.default_origin = self.default_origin
+            return descriptor
 
     def __iconcat__(self, other):
         raise NotImplementedError("Concatenation of Storages is not supported")
@@ -313,7 +346,7 @@ class GPUStorage(Storage):
 
     def __getitem__(self, item):
         self.device_to_host()
-        self._new_index = gt_utils.listify(item)
+        self._new_index = gtc_utils.listify(item)
         return super().__getitem__(item)
 
     def __setitem__(self, key, value):
@@ -400,7 +433,7 @@ class CPUStorage(Storage):
         return res
 
     def __getitem__(self, item):
-        self._new_index = gt_utils.listify(item)
+        self._new_index = gtc_utils.listify(item)
         return super().__getitem__(item)
 
 
@@ -468,7 +501,7 @@ class ExplicitlySyncedGPUStorage(Storage):
     def __getitem__(self, item):
         if self._is_device_modified:
             self.device_to_host()
-        self._new_index = gt_utils.listify(item)
+        self._new_index = gtc_utils.listify(item)
         return super().__getitem__(item)
 
     @property
